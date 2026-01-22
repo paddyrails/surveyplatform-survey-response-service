@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: surveyplatform-survey-response-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: surveyplatform-survey-response-service
+  template:
+    metadata:
+      labels:
+        app: surveyplatform-survey-response-service
+    spec:
+      containers:
+        - name: surveyplatform-survey-response-service
+          image: surveyplatform-survey-response-service:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: "Production"
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
