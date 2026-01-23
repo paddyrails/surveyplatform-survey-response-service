@@ -1,0 +1,144 @@
+name: 'Survey Response: Deploy'
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, staging, prod]
+      tag:
+        description: 'Image tag (leave empty for latest)'
+        required: false
+
+env:
+  SERVICE_NAME: survey-response-service
+  RESOURCE_GROUP: rg-surveyplatform-${{ github.event.inputs.environment }}
+  NAMESPACE: survey-platform
+
+jobs:
+  deploy:
+    name: Deploy to AKS
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get Resources
+        id: res
+        run: |
+          echo "aks=$(az aks list -g ${{ env.RESOURCE_GROUP }} --query '[0].name' -o tsv)" >> $GITHUB_OUTPUT
+          ACR=$(az acr list -g ${{ env.RESOURCE_GROUP }} --query '[0].name' -o tsv)
+          echo "acr_server=$(az acr show -n $ACR --query loginServer -o tsv)" >> $GITHUB_OUTPUT
+          echo "kv=$(az keyvault list -g ${{ env.RESOURCE_GROUP }} --query '[0].name' -o tsv)" >> $GITHUB_OUTPUT
+
+      - name: Setup
+        run: az aks get-credentials -g ${{ env.RESOURCE_GROUP }} -n ${{ steps.res.outputs.aks }} --overwrite-existing
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Create Secrets
+        run: |
+          KV="${{ steps.res.outputs.kv }}"
+          kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+          
+          DB=$(az keyvault secret show --vault-name $KV --name survey-response-db-connection --query value -o tsv 2>/dev/null || echo "")
+          SB=$(az keyvault secret show --vault-name $KV --name servicebus-connection-string --query value -o tsv 2>/dev/null || echo "")
+          REDIS=$(az keyvault secret show --vault-name $KV --name redis-connection-string --query value -o tsv 2>/dev/null || echo "")
+          
+          kubectl create secret generic survey-response-db --namespace ${{ env.NAMESPACE }} --from-literal=connection="$DB" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic servicebus-credentials --namespace ${{ env.NAMESPACE }} --from-literal=connection-string="$SB" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic redis-credentials --namespace ${{ env.NAMESPACE }} --from-literal=connection-string="$REDIS" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy
+        run: |
+          TAG="${{ github.event.inputs.tag || 'latest' }}"
+          cat <<EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${{ env.SERVICE_NAME }}
+            namespace: ${{ env.NAMESPACE }}
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: ${{ env.SERVICE_NAME }}
+            template:
+              metadata:
+                labels:
+                  app: ${{ env.SERVICE_NAME }}
+              spec:
+                containers:
+                  - name: ${{ env.SERVICE_NAME }}
+                    image: ${{ steps.res.outputs.acr_server }}/${{ env.SERVICE_NAME }}:$TAG
+                    ports:
+                      - containerPort: 80
+                    env:
+                      - name: ASPNETCORE_ENVIRONMENT
+                        value: "Production"
+                      - name: ConnectionStrings__DefaultConnection
+                        valueFrom:
+                          secretKeyRef:
+                            name: survey-response-db
+                            key: connection
+                      - name: ServiceBus__ConnectionString
+                        valueFrom:
+                          secretKeyRef:
+                            name: servicebus-credentials
+                            key: connection-string
+                      - name: Redis__ConnectionString
+                        valueFrom:
+                          secretKeyRef:
+                            name: redis-credentials
+                            key: connection-string
+                    resources:
+                      requests:
+                        memory: "128Mi"
+                        cpu: "100m"
+                      limits:
+                        memory: "256Mi"
+                        cpu: "500m"
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${{ env.SERVICE_NAME }}
+            namespace: ${{ env.NAMESPACE }}
+          spec:
+            selector:
+              app: ${{ env.SERVICE_NAME }}
+            ports:
+              - port: 80
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ${{ env.SERVICE_NAME }}-ingress
+            namespace: ${{ env.NAMESPACE }}
+            annotations:
+              nginx.ingress.kubernetes.io/rewrite-target: /\$2
+              nginx.ingress.kubernetes.io/use-regex: "true"
+          spec:
+            ingressClassName: nginx
+            rules:
+              - http:
+                  paths:
+                    - path: /api/responses(/|$)(.*)
+                      pathType: ImplementationSpecific
+                      backend:
+                        service:
+                          name: ${{ env.SERVICE_NAME }}
+                          port:
+                            number: 80
+          EOF
+
+      - name: Wait & Summary
+        run: |
+          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --timeout=300s
+          IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "## ✅ Deployed: http://$IP/api/responses" >> $GITHUB_STEP_SUMMARY

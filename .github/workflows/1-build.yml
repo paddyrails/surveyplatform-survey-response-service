@@ -1,0 +1,50 @@
+name: 'Survey Response: Build & Push'
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, staging, prod]
+      tag:
+        description: 'Image tag (leave empty for commit SHA)'
+        required: false
+
+  push:
+    branches: [main]
+    paths:
+      - 'services/SurveyResponseService/**'
+
+env:
+  SERVICE_NAME: survey-response-service
+  SERVICE_PATH: services/SurveyResponseService
+  RESOURCE_GROUP: rg-surveyplatform-${{ github.event.inputs.environment || 'dev' }}
+
+jobs:
+  build:
+    name: Build & Push Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Get ACR
+        id: acr
+        run: |
+          ACR_NAME=$(az acr list -g ${{ env.RESOURCE_GROUP }} --query '[0].name' -o tsv)
+          echo "name=$ACR_NAME" >> $GITHUB_OUTPUT
+          echo "server=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
+
+      - name: Build & Push
+        run: |
+          az acr login --name ${{ steps.acr.outputs.name }}
+          TAG="${{ github.event.inputs.tag || github.sha }}"
+          docker build -t ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG -t ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:latest ${{ env.SERVICE_PATH }}
+          docker push ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG
+          docker push ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:latest
+          echo "## ✅ Built: \`${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG\`" >> $GITHUB_STEP_SUMMARY

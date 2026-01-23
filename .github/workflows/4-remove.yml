@@ -1,0 +1,37 @@
+name: 'Survey Response: Remove'
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, staging, prod]
+      confirm:
+        description: 'Type "DELETE" to confirm'
+        required: true
+
+env:
+  SERVICE_NAME: survey-response-service
+  RESOURCE_GROUP: rg-surveyplatform-${{ github.event.inputs.environment }}
+  NAMESPACE: survey-platform
+
+jobs:
+  remove:
+    if: github.event.inputs.confirm == 'DELETE'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - run: |
+          AKS=$(az aks list -g ${{ env.RESOURCE_GROUP }} --query '[0].name' -o tsv)
+          az aks get-credentials -g ${{ env.RESOURCE_GROUP }} -n $AKS --overwrite-existing
+      - uses: azure/setup-kubectl@v4
+      - run: |
+          kubectl delete ingress ${{ env.SERVICE_NAME }}-ingress -n ${{ env.NAMESPACE }} --ignore-not-found
+          kubectl delete svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found
+          kubectl delete deployment ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found
+          echo "## ✅ Removed" >> $GITHUB_STEP_SUMMARY

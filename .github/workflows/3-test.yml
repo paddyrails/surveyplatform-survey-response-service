@@ -1,0 +1,58 @@
+name: 'Survey Response: Test APIs'
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options: [dev, staging, prod]
+
+env:
+  SERVICE_NAME: survey-response-service
+  RESOURCE_GROUP: rg-surveyplatform-${{ github.event.inputs.environment }}
+  NAMESPACE: survey-platform
+
+jobs:
+  test:
+    name: Test APIs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Setup
+        run: |
+          AKS=$(az aks list -g ${{ env.RESOURCE_GROUP }} --query '[0].name' -o tsv)
+          az aks get-credentials -g ${{ env.RESOURCE_GROUP }} -n $AKS --overwrite-existing
+
+      - uses: azure/setup-kubectl@v4
+
+      - name: Test
+        run: |
+          IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          BASE="http://$IP/api/responses"
+          
+          echo "## Survey Response API Tests" >> $GITHUB_STEP_SUMMARY
+          
+          # Health
+          H=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health" || echo "000")
+          echo "- Health: $H" >> $GITHUB_STEP_SUMMARY
+          
+          # GET responses
+          G=$(curl -s -o /dev/null -w "%{http_code}" "$BASE" || echo "000")
+          echo "- GET /api/responses: $G" >> $GITHUB_STEP_SUMMARY
+          
+          # POST response
+          P=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE" \
+            -H "Content-Type: application/json" \
+            -d '{"surveyId":"test","answers":[]}' || echo "000")
+          echo "- POST /api/responses: $P" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Pods" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.SERVICE_NAME }} >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
