@@ -15,12 +15,12 @@ on:
 
   push:
     branches: [main]
-    paths:
-      - 'services/SurveyResponseService/**'
+    paths: # disabled for separate repo
+      # - '.'  # uncomment if needed
 
 env:
   SERVICE_NAME: survey-response-service
-  SERVICE_PATH: services/SurveyResponseService
+  SERVICE_PATH: docker
   RESOURCE_GROUP: rg-surveyplatform-${{ github.event.inputs.environment || 'dev' }}
 
 jobs:
@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/login@v2
+      - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
@@ -40,11 +40,20 @@ jobs:
           echo "name=$ACR_NAME" >> $GITHUB_OUTPUT
           echo "server=$(az acr show -n $ACR_NAME --query loginServer -o tsv)" >> $GITHUB_OUTPUT
 
+      - name: Debug - List files
+        run: |
+          echo "Files in repo root:"
+          ls -la
+          echo ""
+          echo "Looking for src folder:"
+          ls -la src/ || echo "src/ not found"
+
       - name: Build & Push
         run: |
           az acr login --name ${{ steps.acr.outputs.name }}
           TAG="${{ github.event.inputs.tag || github.sha }}"
-          docker build -t ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG -t ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:latest ${{ env.SERVICE_PATH }}
+          docker build --no-cache -t ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG -t ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:latest -f docker/Dockerfile .
           docker push ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG
           docker push ${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:latest
-          echo "## ✅ Built: \`${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG\`" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Built & Pushed" >> $GITHUB_STEP_SUMMARY
+          echo "Image: \`${{ steps.acr.outputs.server }}/${{ env.SERVICE_NAME }}:$TAG\`" >> $GITHUB_STEP_SUMMARY

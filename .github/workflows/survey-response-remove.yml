@@ -23,7 +23,7 @@ jobs:
     if: github.event.inputs.confirm == 'DELETE'
     runs-on: ubuntu-latest
     steps:
-      - uses: azure/login@v2
+      - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       - run: |
@@ -34,4 +34,5 @@ jobs:
           kubectl delete ingress ${{ env.SERVICE_NAME }}-ingress -n ${{ env.NAMESPACE }} --ignore-not-found
           kubectl delete svc ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found
           kubectl delete deployment ${{ env.SERVICE_NAME }} -n ${{ env.NAMESPACE }} --ignore-not-found
+          kubectl delete secret ${{ env.SERVICE_NAME }}-secrets -n ${{ env.NAMESPACE }} --ignore-not-found
           echo "## ✅ Removed" >> $GITHUB_STEP_SUMMARY
