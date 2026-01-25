@@ -28,9 +28,16 @@ public static class DependencyInjection
         services.TryAddSingleton<Microsoft.AspNetCore.Http.IHttpContextAccessor, Microsoft.AspNetCore.Http.HttpContextAccessor>();
         services.AddScoped<ICurrentUserService, CurrentUserService>();
 
+        // Messaging (publisher only)
         var messagingProvider = config["Messaging:Provider"] ?? "RabbitMQ";
-        if (messagingProvider == "RabbitMQ")
+        if (messagingProvider.Equals("AzureServiceBus", StringComparison.OrdinalIgnoreCase))
+        {
+            services.AddSingleton<IEventPublisher, AzureServiceBusEventPublisher>();
+        }
+        else
+        {
             services.AddSingleton<IEventPublisher, RabbitMqEventPublisher>();
+        }
 
         var redis = config.GetConnectionString("Redis");
         if (!string.IsNullOrEmpty(redis))
